@@ -18,29 +18,29 @@ $stmtProductos = oci_parse($conn, $sqlProductos);
 oci_execute($stmtProductos);
 
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    $producto = $_POST['producto'];
+    $producto     = $_POST['producto'];
     $stock_actual = $_POST['stock_actual'];
     $stock_minimo = $_POST['stock_minimo'];
-    
+
     // Validaciones
     $errores = [];
-    
+
     if (empty($producto)) $errores[] = "Debe seleccionar un producto";
-    if (empty($stock_actual)) $errores[] = "El stock actual es requerido";
-    if (empty($stock_minimo)) $errores[] = "El stock mínimo es requerido";
-    
+    if (empty($stock_actual) && $stock_actual !== '0') $errores[] = "El stock actual es requerido";
+    if (empty($stock_minimo) && $stock_minimo !== '0') $errores[] = "El stock mínimo es requerido";
+
     if (!is_numeric($stock_actual) || $stock_actual < 0) {
         $errores[] = "El stock actual debe ser un número mayor o igual a 0";
     }
-    
+
     if (!is_numeric($stock_minimo) || $stock_minimo < 0) {
         $errores[] = "El stock mínimo debe ser un número mayor o igual a 0";
     }
-    
-    if ($stock_minimo > $stock_actual) {
+
+    if (is_numeric($stock_minimo) && is_numeric($stock_actual) && $stock_minimo > $stock_actual) {
         $errores[] = "El stock mínimo no puede ser mayor que el stock actual";
     }
-    
+
     if (empty($errores)) {
         // Verificar si el producto ya tiene inventario
         $sqlCheck = "SELECT COUNT(*) as total FROM MUEBLERIA.INVENTARIO WHERE ID_PRODUCTO = :producto";
@@ -48,7 +48,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         oci_bind_by_name($stmtCheck, ":producto", $producto);
         oci_execute($stmtCheck);
         $rowCheck = oci_fetch_assoc($stmtCheck);
-        
+
         if ($rowCheck['TOTAL'] > 0) {
             echo "<script>
                 Swal.fire({
@@ -60,27 +60,22 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             </script>";
             exit;
         }
-        
-        // Obtener el siguiente ID (usando NVL en lugar de SEQ)
-        $sqlNextId = "SELECT NVL(MAX(ID_INVENTARIO), 0) + 1 as next_id FROM MUEBLERIA.INVENTARIO";
-        $stmtNextId = oci_parse($conn, $sqlNextId);
-        oci_execute($stmtNextId);
-        $rowNextId = oci_fetch_assoc($stmtNextId);
-        $nuevo_id = $rowNextId['NEXT_ID'];
-        
-        $sql = "INSERT INTO MUEBLERIA.INVENTARIO (ID_INVENTARIO, ID_PRODUCTO, STOCK_ACTUAL, STOCK_MINIMO)
-                VALUES (:id, :producto, :actual, :minimo)";
-        
-        $stmt = oci_parse($conn, $sql);
-        
-        oci_bind_by_name($stmt, ":id", $nuevo_id);
-        oci_bind_by_name($stmt, ":producto", $producto);
-        oci_bind_by_name($stmt, ":actual", $stock_actual);
-        oci_bind_by_name($stmt, ":minimo", $stock_minimo);
-        
-        if (oci_execute($stmt)) {
-            oci_commit($conn);
-            
+
+        // ── Llamar PKG_INVENTARIO.SP_INSERTAR_INVENTARIO ────────────────────────
+        // Los triggers trg_inv_stock_actual y trg_inv_stock_minimo se activan
+        // automáticamente dentro del INSERT que ejecuta el stored procedure.
+        // Si disparan un error el SP lo captura en SQLERRM y lo devuelve en :resultado
+        $resultado = '';
+        $stmt = oci_parse($conn,
+            "BEGIN PKG_INVENTARIO.SP_INSERTAR_INVENTARIO(:prod, :actual, :minimo, :res); END;"
+        );
+        oci_bind_by_name($stmt, ':prod',   $producto,     32);
+        oci_bind_by_name($stmt, ':actual', $stock_actual, 32);
+        oci_bind_by_name($stmt, ':minimo', $stock_minimo, 32);
+        oci_bind_by_name($stmt, ':res',    $resultado,   500);
+        oci_execute($stmt);
+
+        if (strpos($resultado, 'OK') === 0) {
             // Obtener nombre del producto para el mensaje
             $sqlNombre = "SELECT NOMBRE FROM MUEBLERIA.PRODUCTO WHERE ID_PRODUCTO = :producto";
             $stmtNombre = oci_parse($conn, $sqlNombre);
@@ -88,7 +83,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             oci_execute($stmtNombre);
             $rowNombre = oci_fetch_assoc($stmtNombre);
             $nombreProducto = $rowNombre['NOMBRE'];
-            
+
             echo "<script>
                 Swal.fire({
                     icon: 'success',
@@ -99,12 +94,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 }).then(() => window.location.href = 'inventario.php');
             </script>";
         } else {
-            $error = oci_error($stmt);
+            // Muestra el mensaje del trigger o del SP
             echo "<script>
                 Swal.fire({
                     icon: 'error',
-                    title: 'Error',
-                    text: 'Error al guardar: " . addslashes($error['message']) . "',
+                    title: 'Error al guardar',
+                    text: " . json_encode($resultado) . ",
                     confirmButtonColor: '#2c3e50'
                 });
             </script>";
@@ -188,9 +183,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             <div class="mb-3">
                 <label for="stock_actual" class="form-label">
                     <i class="fas fa-chart-line"></i> Stock Actual *
-                   
                 </label>
-                <input type="text" name="stock_actual" id="stock_actual" class="form-control" 
+                <input type="text" name="stock_actual" id="stock_actual" class="form-control"
                        placeholder="Ej: 10, 25, 100"
                        onkeyup="validarStockActual()"
                        onblur="validarStockActual()"
@@ -204,9 +198,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             <div class="mb-3">
                 <label for="stock_minimo" class="form-label">
                     <i class="fas fa-exclamation-triangle"></i> Stock Mínimo *
-                    
                 </label>
-                <input type="text" name="stock_minimo" id="stock_minimo" class="form-control" 
+                <input type="text" name="stock_minimo" id="stock_minimo" class="form-control"
                        placeholder="Ej: 5, 10, 20"
                        onkeyup="validarStockMinimo()"
                        onblur="validarStockMinimo()"
@@ -241,7 +234,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
 <script>
 // ============================================
-// VALIDACIONES  PARA INVENTARIO
+// VALIDACIONES PARA INVENTARIO
 // ============================================
 
 // 1. Validar selección de producto
@@ -249,7 +242,7 @@ function validarProducto() {
     var input = document.getElementById('producto');
     var errorDiv = document.getElementById('error-producto');
     var valor = input.value;
-    
+
     if (valor === '') {
         errorDiv.classList.add('show');
         input.classList.add('input-error');
@@ -264,20 +257,20 @@ function validarProducto() {
     }
 }
 
-//  Validar STOCK ACTUAL (solo números enteros)
+// Validar STOCK ACTUAL (solo números enteros)
 function validarStockActual() {
     var input = document.getElementById('stock_actual');
     var errorDiv = document.getElementById('error-stock-actual');
     var valor = input.value.trim();
     var regex = /^[0-9]+$/;
-    
+
     if (valor === '') {
         errorDiv.classList.remove('show');
         input.classList.remove('input-error', 'input-success');
         actualizarResumen();
         return true;
     }
-    
+
     if (!regex.test(valor) || parseInt(valor) < 0) {
         errorDiv.classList.add('show');
         input.classList.add('input-error');
@@ -293,20 +286,20 @@ function validarStockActual() {
     }
 }
 
-//  Validar STOCK MÍNIMO (solo números enteros)
+// Validar STOCK MÍNIMO (solo números enteros)
 function validarStockMinimo() {
     var input = document.getElementById('stock_minimo');
     var errorDiv = document.getElementById('error-stock-minimo');
     var valor = input.value.trim();
     var regex = /^[0-9]+$/;
-    
+
     if (valor === '') {
         errorDiv.classList.remove('show');
         input.classList.remove('input-error', 'input-success');
         actualizarResumen();
         return true;
     }
-    
+
     if (!regex.test(valor) || parseInt(valor) < 0) {
         errorDiv.classList.add('show');
         input.classList.add('input-error');
@@ -322,34 +315,32 @@ function validarStockMinimo() {
     }
 }
 
-//  Actualizar resumen 
+// Actualizar resumen
 function actualizarResumen() {
     var productoSelect = document.getElementById('producto');
     var stockActualInput = document.getElementById('stock_actual');
     var stockMinimoInput = document.getElementById('stock_minimo');
     var resumenDiv = document.getElementById('resumen-inventario');
-    
+
     var productoId = productoSelect.value;
     var stockActual = stockActualInput.value.trim();
     var stockMinimo = stockMinimoInput.value.trim();
-    
+
     if (productoId !== '') {
-        // Obtener nombre del producto
         var selectedOption = productoSelect.options[productoSelect.selectedIndex];
         var nombreProducto = selectedOption.text;
-        
+
         document.getElementById('resumen-producto-nombre').innerHTML = '<i class="fas fa-couch"></i> <strong>Producto:</strong> ' + nombreProducto;
-        
+
         if (stockActual !== '' && /^[0-9]+$/.test(stockActual)) {
             document.getElementById('resumen-stock-actual').innerHTML = '<i class="fas fa-chart-line"></i> <strong>Stock Actual:</strong> ' + stockActual;
         } else {
             document.getElementById('resumen-stock-actual').innerHTML = '<i class="fas fa-chart-line"></i> <strong>Stock Actual:</strong> (por definir)';
         }
-        
+
         if (stockMinimo !== '' && /^[0-9]+$/.test(stockMinimo)) {
             document.getElementById('resumen-stock-minimo').innerHTML = '<i class="fas fa-exclamation-triangle"></i> <strong>Stock Mínimo:</strong> ' + stockMinimo;
-            
-            // Verificar alerta de stock bajo
+
             if (stockActual !== '' && /^[0-9]+$/.test(stockActual) && parseInt(stockActual) <= parseInt(stockMinimo)) {
                 document.getElementById('alerta-stock').innerHTML = '<i class="fas fa-bell"></i> ⚠️ ¡Alerta! El stock actual está en o por debajo del mínimo.';
             } else {
@@ -358,7 +349,7 @@ function actualizarResumen() {
         } else {
             document.getElementById('resumen-stock-minimo').innerHTML = '<i class="fas fa-exclamation-triangle"></i> <strong>Stock Mínimo:</strong> (por definir)';
         }
-        
+
         resumenDiv.classList.add('show');
     } else {
         resumenDiv.classList.remove('show');
@@ -368,45 +359,45 @@ function actualizarResumen() {
 // Validar TODO el formulario antes de enviar
 function validarFormulario(event) {
     event.preventDefault();
-    
+
     var productoValido = validarProducto();
     var stockActualValido = validarStockActual();
     var stockMinimoValido = validarStockMinimo();
-    
+
     var producto = document.getElementById('producto').value;
     var stockActual = document.getElementById('stock_actual').value.trim();
     var stockMinimo = document.getElementById('stock_minimo').value.trim();
-    
+
     if (producto === '') {
         Swal.fire({ icon: 'warning', title: 'Campo requerido', text: 'Por favor seleccione un producto', confirmButtonColor: '#2c3e50' });
         return false;
     }
-    
+
     if (stockActual === '') {
         Swal.fire({ icon: 'warning', title: 'Campo requerido', text: 'Por favor ingrese el stock actual', confirmButtonColor: '#2c3e50' });
         return false;
     }
-    
+
     if (!/^[0-9]+$/.test(stockActual) || parseInt(stockActual) < 0) {
         Swal.fire({ icon: 'warning', title: 'Stock actual inválido', text: 'El stock actual debe ser un número entero mayor o igual a 0', confirmButtonColor: '#2c3e50' });
         return false;
     }
-    
+
     if (stockMinimo === '') {
         Swal.fire({ icon: 'warning', title: 'Campo requerido', text: 'Por favor ingrese el stock mínimo', confirmButtonColor: '#2c3e50' });
         return false;
     }
-    
+
     if (!/^[0-9]+$/.test(stockMinimo) || parseInt(stockMinimo) < 0) {
         Swal.fire({ icon: 'warning', title: 'Stock mínimo inválido', text: 'El stock mínimo debe ser un número entero mayor o igual a 0', confirmButtonColor: '#2c3e50' });
         return false;
     }
-    
+
     if (parseInt(stockMinimo) > parseInt(stockActual)) {
         Swal.fire({ icon: 'warning', title: 'Stock inválido', text: 'El stock mínimo no puede ser mayor que el stock actual', confirmButtonColor: '#2c3e50' });
         return false;
     }
-    
+
     event.target.submit();
     return true;
 }
