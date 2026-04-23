@@ -13,8 +13,10 @@ $conn = $db->getConnection();
 
 $id = $_GET['id'] ?? 0;
 
-// Datos del pedido
-$query = "SELECT p.*, c.NOMBRE as CLIENTE, c.TELEFONO, c.CORREO, c.DIRECCION,
+// Datos del pedido con fecha formateada
+$query = "SELECT p.ID_PEDIDO, p.ESTADO, p.TOTAL, 
+                 TO_CHAR(p.FECHA, 'DD/MM/YYYY') as FECHA_FORMATEADA,
+                 c.NOMBRE as CLIENTE, c.TELEFONO, c.CORREO, c.DIRECCION,
                  u.NOMBRE as USUARIO
           FROM MUEBLERIA.PEDIDO p
           JOIN MUEBLERIA.CLIENTE c ON p.ID_CLIENTE = c.ID_CLIENTE
@@ -81,7 +83,7 @@ oci_execute($stmt_det);
             </div>
             <div class="col-md-3">
                 <div class="detalle-label">Fecha:</div>
-                <div class="detalle-valor"><?php echo date('d/m/Y', strtotime($pedido['FECHA'])); ?></div>
+                <div class="detalle-valor"><?php echo $pedido['FECHA_FORMATEADA']; ?></div>
             </div>
             <div class="col-md-3">
                 <div class="detalle-label">Estado:</div>
@@ -203,24 +205,6 @@ oci_execute($stmt_det);
             <a href="javascript:window.print()" class="btn btn-info">
                 <i class="fas fa-print"></i> Imprimir
             </a>
-            <?php if ($pedido['ESTADO'] == 'PENDIENTE'): ?>
-            <a href="editar_estado.php?id=<?php echo $pedido['ID_PEDIDO']; ?>&estado=ENVIADO" 
-               class="btn btn-primary"
-               onclick="return confirm('¿Marcar este pedido como ENVIADO?')">
-                <i class="fas fa-truck"></i> Marcar como Enviado
-            </a>
-            <a href="editar_estado.php?id=<?php echo $pedido['ID_PEDIDO']; ?>&estado=ENTREGADO" 
-               class="btn btn-success"
-               onclick="return confirm('¿Marcar este pedido como ENTREGADO?')">
-                <i class="fas fa-check-circle"></i> Marcar como Entregado
-            </a>
-            <?php elseif ($pedido['ESTADO'] == 'ENVIADO'): ?>
-            <a href="editar_estado.php?id=<?php echo $pedido['ID_PEDIDO']; ?>&estado=ENTREGADO" 
-               class="btn btn-success"
-               onclick="return confirm('¿Marcar este pedido como ENTREGADO?')">
-                <i class="fas fa-check-circle"></i> Marcar como Entregado
-            </a>
-            <?php endif; ?>
         </div>
         
     </div>
