@@ -13,7 +13,7 @@ $conn = $db->getConnection();
 
 $id = $_GET['id'] ?? 0;
 
-<<<<<<< HEAD
+
 /* -------------------------------------------------------
 PKG_PEDIDO.FN_OBTENER_PEDIDO(p_id) RETURN SYS_REFCURSOR
 CursorID_PEDIDO, FECHA, ESTADO, TOTAL, CLIENTE,
@@ -47,7 +47,7 @@ while ($row = oci_fetch_assoc($cursor)) {
 }
 oci_free_statement($stid);
 oci_free_statement($cursor);
-=======
+
 // Datos del pedido con fecha formateada
 $query = "SELECT p.ID_PEDIDO, p.ESTADO, p.TOTAL, 
                  TO_CHAR(p.FECHA, 'DD/MM/YYYY') as FECHA_FORMATEADA,
@@ -61,7 +61,7 @@ $stmt = oci_parse($conn, $query);
 oci_bind_by_name($stmt, ':id', $id);
 oci_execute($stmt);
 $pedido = oci_fetch_assoc($stmt);
->>>>>>> 67633bfd7833e943dc42bb981625ce3ef9407bc1
+
 
 if (!$pedido) {
     echo "<script>
