@@ -25,7 +25,7 @@ oci_execute($stmt_prov);
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $nombre = trim($_POST['nombre']);
     $descripcion = $_POST['descripcion'];
-    $precio = floatval($_POST['precio']);
+    $precio = floatval(str_replace(',', '.', $_POST['precio']));
     $madera = $_POST['madera'];
     $medidas = $_POST['medidas'];
     $foto_url = $_POST['foto_url'];
@@ -95,45 +95,55 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     }
     
     if (empty($errores)) {
-        $query_id = "SELECT NVL(MAX(ID_PRODUCTO), 0) + 1 as ID FROM MUEBLERIA.PRODUCTO";
-        $stmt_id = oci_parse($conn, $query_id);
-        oci_execute($stmt_id);
-        $row_id = oci_fetch_assoc($stmt_id);
-        $nuevo_id = $row_id['ID'];
+        // ============================================
+        // USANDO EL PAQUETE PKG_PRODUCTO
+        // ya no se necesita calcular el ID manualmente
+        // ============================================
         
-        $query = "INSERT INTO MUEBLERIA.PRODUCTO 
-                  (ID_PRODUCTO, NOMBRE, DESCRIPCION, PRECIO, MADERA, MEDIDAS, FOTO_URL, ESTADO, ID_CATEGORIA, ID_PROVEEDOR)
-                  VALUES 
-                  (:id, :nombre, :descripcion, :precio, :madera, :medidas, :foto_url, :estado, :id_categoria, :id_proveedor)";
+        // Convertir el precio a formato para Oracle (punto a coma)
+        $precio_oracle = str_replace('.', ',', $precio);
         
-        $stmt = oci_parse($conn, $query);
-        oci_bind_by_name($stmt, ':id', $nuevo_id);
+        $sql = "BEGIN PKG_PRODUCTO.SP_INSERTAR_PRODUCTO(
+                    :nombre, :descripcion, :precio, :madera, :medidas,
+                    :foto_url, :estado, :id_categoria, :id_proveedor, :resultado
+                ); END;";
+        
+        $stmt = oci_parse($conn, $sql);
+        
         oci_bind_by_name($stmt, ':nombre', $nombre);
         oci_bind_by_name($stmt, ':descripcion', $descripcion);
-        
-        // Convertir el precio a formato Oracle (coma decimal)
-        $precio_oracle = str_replace('.', ',', $precio);
         oci_bind_by_name($stmt, ':precio', $precio_oracle);
-        
         oci_bind_by_name($stmt, ':madera', $madera);
         oci_bind_by_name($stmt, ':medidas', $medidas);
         oci_bind_by_name($stmt, ':foto_url', $foto_url);
         oci_bind_by_name($stmt, ':estado', $estado);
         oci_bind_by_name($stmt, ':id_categoria', $id_categoria);
         oci_bind_by_name($stmt, ':id_proveedor', $id_proveedor);
+        oci_bind_by_name($stmt, ':resultado', $resultado, 500);
         
         if (oci_execute($stmt)) {
-            echo "<script>
-                Swal.fire({
-                    icon: 'success',
-                    title: '¡Producto guardado!',
-                    text: 'El producto \"$nombre\" ha sido creado exitosamente',
-                    confirmButtonColor: '#2c3e50',
-                    confirmButtonText: 'Ver productos'
-                }).then((result) => {
-                    window.location.href = 'productos.php';
-                });
-            </script>";
+            if (strpos($resultado, 'OK') !== false) {
+                echo "<script>
+                    Swal.fire({
+                        icon: 'success',
+                        title: '¡Producto guardado!',
+                        text: 'El producto \"$nombre\" ha sido creado exitosamente',
+                        confirmButtonColor: '#2c3e50',
+                        confirmButtonText: 'Ver productos'
+                    }).then((result) => {
+                        window.location.href = 'productos.php';
+                    });
+                </script>";
+            } else {
+                echo "<script>
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Error',
+                        text: '$resultado',
+                        confirmButtonColor: '#2c3e50'
+                    });
+                </script>";
+            }
         } else {
             $error = oci_error($stmt);
             echo "<script>
@@ -145,6 +155,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 });
             </script>";
         }
+        // ============================================
     } else {
         $mensaje_error = implode("\\n", $errores);
         echo "<script>
@@ -244,11 +255,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 <!-- Columna derecha - Datos del producto -->
                 <div class="col-md-8">
                     <div class="row">
-                        <!-- Campo NOMBRE - con validación en tiempo real -->
+                        <!-- Campo NOMBRE -->
                         <div class="col-md-6 mb-3">
                             <label for="nombre" class="form-label">
                                 <i class="fas fa-tag"></i> Nombre * 
-                               
                             </label>
                             <input type="text" class="form-control" id="nombre" name="nombre" required 
                                    placeholder="Ej: Silla Clásica"
@@ -262,11 +272,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             </div>
                         </div>
                         
-                        <!-- Campo PRECIO - con validación en tiempo real -->
+                        <!-- Campo PRECIO -->
                         <div class="col-md-6 mb-3">
                             <label for="precio" class="form-label">
                                 <i class="fas fa-dollar-sign"></i> Precio * 
-                                <
                             </label>
                             <input type="text" class="form-control" id="precio" name="precio" 
                                    required placeholder="0.00"
@@ -286,11 +295,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                       rows="3" placeholder="Descripción del producto"></textarea>
                         </div>
                         
-                        <!-- Campo MADERA - solo letras -->
+                        <!-- Campo MADERA -->
                         <div class="col-md-6 mb-3">
                             <label for="madera" class="form-label">
                                 <i class="fas fa-tree"></i> Madera 
-                                
                             </label>
                             <input type="text" class="form-control" id="madera" name="madera" 
                                    placeholder="Ej: Roble, Cedro, Pino..."
@@ -301,11 +309,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             </div>
                         </div>
                         
-                        <!-- Campo MEDIDAS - formato 45x45x90 -->
+                        <!-- Campo MEDIDAS -->
                         <div class="col-md-6 mb-3">
                             <label for="medidas" class="form-label">
                                 <i class="fas fa-ruler"></i> Medidas 
-                            
                             </label>
                             <input type="text" class="form-control" id="medidas" name="medidas" 
                                    placeholder="Ej: 45x45x90"
@@ -426,10 +433,8 @@ function validarNombreUnico() {
         return;
     }
     
-    // Limpiar timeout anterior
     if (timeoutNombre) clearTimeout(timeoutNombre);
     
-    // Esperar a que el usuario termine de escribir (debounce)
     timeoutNombre = setTimeout(function() {
         var xhr = new XMLHttpRequest();
         xhr.open('GET', 'verificar_nombre.php?nombre=' + encodeURIComponent(nombre), true);
@@ -453,7 +458,7 @@ function validarNombreUnico() {
     }, 500);
 }
 
-// 3. Validar PRECIO (solo números, decimales opcionales, con límite)
+// 3. Validar PRECIO
 function validarPrecio() {
     var input = document.getElementById('precio');
     var errorDiv = document.getElementById('error-precio');
@@ -476,7 +481,7 @@ function validarPrecio() {
     
     if (parseFloat(valor) > MAXIMO_PERMITIDO) {
         errorDiv.classList.add('show');
-        errorDiv.innerHTML = '<i class="fas fa-times-circle"></i> El precio no puede exceder ₡' + MAXIMO_PERMITIDO.toLocaleString('es-CR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        errorDiv.innerHTML = '<i class="fas fa-times-circle"></i> El precio no puede exceder ₡' + MAXIMO_PERMITIDO.toLocaleString('es-CR', {minimumFractionDigits: 2});
         input.classList.add('input-error');
         input.classList.remove('input-success');
         return false;
@@ -488,7 +493,7 @@ function validarPrecio() {
     return true;
 }
 
-// 4. Validar MADERA (solo letras)
+// 4. Validar MADERA
 function validarMadera() {
     var input = document.getElementById('madera');
     var errorDiv = document.getElementById('error-madera');
@@ -514,7 +519,7 @@ function validarMadera() {
     }
 }
 
-// 5. Validar MEDIDAS (formato: número x número x número)
+// 5. Validar MEDIDAS
 function validarMedidas() {
     var input = document.getElementById('medidas');
     var errorDiv = document.getElementById('error-medidas');
@@ -540,7 +545,7 @@ function validarMedidas() {
     }
 }
 
-// Función para actualizar la vista previa de la imagen
+// Vista previa de la imagen
 function actualizarPreview(url) {
     var preview = document.getElementById('preview');
     if (url.trim() !== '') {
@@ -554,7 +559,7 @@ function actualizarPreview(url) {
     }
 }
 
-// Validar TODO el formulario antes de enviar
+// Validar formulario completo
 function validarFormulario(event) {
     event.preventDefault();
     
@@ -585,7 +590,7 @@ function validarFormulario(event) {
     }
     
     if (!precioValido) {
-        Swal.fire({ icon: 'warning', title: 'Error en precio', text: 'El precio debe ser un número válido mayor a 0 (max: ₡' + MAXIMO_PERMITIDO.toLocaleString('es-CR', {minimumFractionDigits: 2}) + ')', confirmButtonColor: '#2c3e50' });
+        Swal.fire({ icon: 'warning', title: 'Error en precio', text: 'El precio debe ser un número válido mayor a 0', confirmButtonColor: '#2c3e50' });
         return false;
     }
     
@@ -611,7 +616,7 @@ function validarFormulario(event) {
     return true;
 }
 
-// Inicializar la vista previa
+// Inicializar
 document.addEventListener('DOMContentLoaded', function() {
     var fotoUrl = document.getElementById('foto_url');
     if (fotoUrl.value) {
