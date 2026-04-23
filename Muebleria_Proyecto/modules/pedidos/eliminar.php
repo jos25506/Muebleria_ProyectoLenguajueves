@@ -4,63 +4,51 @@ require_once __DIR__ . '/../../Conexion/conexion.php';
 $db = new Database();
 $conn = $db->getConnection();
 
-if(!$conn){
+if (!$conn) {
     die("Error de conexión");
 }
 
-$mensaje = '';
-$tipo_mensaje = '';
+$resultado = '';
 
-if(isset($_GET['id'])){
-    $id = $_GET['id'];
-    
-    try {
-        oci_commit($conn);
-        
-        // Eliminar detalles
-        $sqlDetalle = "DELETE FROM MUEBLERIA.DETALLE_PEDIDO WHERE ID_PEDIDO = :id";
-        $stmtDetalle = oci_parse($conn, $sqlDetalle);
-        oci_bind_by_name($stmtDetalle, ":id", $id);
-        oci_execute($stmtDetalle);
-        
-        // Eliminar pedido
-        $sqlPedido = "DELETE FROM MUEBLERIA.PEDIDO WHERE ID_PEDIDO = :id";
-        $stmtPedido = oci_parse($conn, $sqlPedido);
-        oci_bind_by_name($stmtPedido, ":id", $id);
-        oci_execute($stmtPedido);
-        
-        oci_commit($conn);
-        $mensaje = "Pedido eliminado correctamente";
-        $tipo_mensaje = "success";
-        
-    } catch (Exception $e) {
-        oci_rollback($conn);
-        $mensaje = "Error al eliminar: " . $e->getMessage();
-        $tipo_mensaje = "error";
-    }
+if (isset($_GET['id'])) {
+    $id = (int)$_GET['id'];
+
+/* -------------------------------------------------------
+PKG_PEDIDO.SP_ELIMINAR_PEDIDO(p_id_pedido, p_resultado OUT)
+El paquete borra DETALLE_PEDIDO y PEDIDO en una sola transacción respetando las fk
+------------------------------------------------------- */
+    $stid = oci_parse($conn,
+        'BEGIN PKG_PEDIDO.SP_ELIMINAR_PEDIDO(:id_pedido, :resultado); END;');
+
+    oci_bind_by_name($stid, ':id_pedido', $id);
+    oci_bind_by_name($stid, ':resultado', $resultado, 500);
+    oci_execute($stid);
+    oci_free_statement($stid);
 } else {
-    $mensaje = "ID no especificado";
-    $tipo_mensaje = "warning";
+    $resultado = 'Error: ID no especificado';
 }
+
+$exitoso = str_starts_with($resultado, 'OK');
+$icono   = $exitoso ? 'success' : 'error';
+$titulo  = $exitoso ? 'Eliminado' : 'Error';
+$db->close();
 ?>
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
+    <meta charset="UTF-8">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 </head>
 <body>
-    <script>
-        Swal.fire({
-            icon: '<?php echo $tipo_mensaje; ?>',
-            title: '<?php echo ($tipo_mensaje == 'success') ? '¡Eliminado!' : 'Error'; ?>',
-            text: '<?php echo addslashes($mensaje); ?>',
-            confirmButtonColor: '#2c3e50'
-        }).then(() => {
-            window.location.href = 'pedidos.php';
-        });
-    </script>
+<script>
+    Swal.fire({
+        icon: '<?php echo $icono; ?>',
+        title: '<?php echo $titulo; ?>',
+        text: '<?php echo addslashes($resultado); ?>',
+        confirmButtonColor: '#2c3e50'
+    }).then(() => {
+        window.location.href = 'pedidos.php';
+    });
+</script>
 </body>
 </html>
-<?php
-$db->close();
-?>

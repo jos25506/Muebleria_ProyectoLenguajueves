@@ -67,75 +67,34 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         if ($cantidad > $stockActual) {
             $mensaje_error = "Stock disponible: $stockActual unidades. No puede pedir $cantidad unidades.";
         } else {
-            // Obtener siguiente ID usando NVL (más seguro que secuencias si no existen)
-            $sqlNextId = "SELECT NVL(MAX(ID_PEDIDO), 0) + 1 as NEXT_ID FROM MUEBLERIA.PEDIDO";
-            $stmtNextId = oci_parse($conn, $sqlNextId);
-            oci_execute($stmtNextId);
-            $rowNextId = oci_fetch_assoc($stmtNextId);
-            $nuevoIdPedido = $rowNextId['NEXT_ID'];
-            
-            // Insertar pedido sin usar secuencia
-            $sqlPedido = "INSERT INTO MUEBLERIA.PEDIDO
-                          (ID_PEDIDO, FECHA, ESTADO, TOTAL, ID_CLIENTE, ID_USUARIO)
-                          VALUES(:id, SYSDATE, :estado, :total, :cliente, :usuario)";
-            
-            $stmtPedido = oci_parse($conn, $sqlPedido);
-            oci_bind_by_name($stmtPedido, ":id", $nuevoIdPedido);
-            oci_bind_by_name($stmtPedido, ":estado", $estado);
-            oci_bind_by_name($stmtPedido, ":total", $subtotal);
-            oci_bind_by_name($stmtPedido, ":cliente", $cliente);
-            oci_bind_by_name($stmtPedido, ":usuario", $_SESSION['usuario_id']);
-            
-            // Insertar detalle
-            $sqlDetalle = "INSERT INTO MUEBLERIA.DETALLE_PEDIDO
-                          (ID_DETALLE, CANTIDAD, PRECIO_UNITARIO, SUB_TOTAL, ID_PEDIDO, ID_PRODUCTO)
-                          VALUES((SELECT NVL(MAX(ID_DETALLE), 0) + 1 FROM MUEBLERIA.DETALLE_PEDIDO), 
-                                 :cantidad, :precio, :subtotal, :pedido, :producto)";
-            
-            $stmtDetalle = oci_parse($conn, $sqlDetalle);
-            oci_bind_by_name($stmtDetalle, ":cantidad", $cantidad);
-            oci_bind_by_name($stmtDetalle, ":precio", $precio);
-            oci_bind_by_name($stmtDetalle, ":subtotal", $subtotal);
-            oci_bind_by_name($stmtDetalle, ":pedido", $nuevoIdPedido);
-            oci_bind_by_name($stmtDetalle, ":producto", $producto);
-            
-            // Ejecutar todo
-            $errorInsert = false;
-            $mensajeErrorTrigger = "";
-            
-            // Ejecutar inserción del pedido
-            if (!@oci_execute($stmtPedido)) {
-                $e = oci_error($stmtPedido);
-                $errorInsert = true;
-                $mensajeErrorTrigger = $e['message'];
-            } else {
-                // Ejecutar inserción del detalle
-                if (!@oci_execute($stmtDetalle)) {
-                    $e = oci_error($stmtDetalle);
-                    $errorInsert = true;
-                    $mensajeErrorTrigger = $e['message'];
-                }
-            }
-            
-            if (!$errorInsert) {
-                // Confirmar transacción
-                oci_commit($conn);
-                
-                // Obtener nombre del producto
-                $sqlNombreProd = "SELECT NOMBRE FROM MUEBLERIA.PRODUCTO WHERE ID_PRODUCTO = :producto";
-                $stmtNombreProd = oci_parse($conn, $sqlNombreProd);
-                oci_bind_by_name($stmtNombreProd, ":producto", $producto);
-                oci_execute($stmtNombreProd);
-                $rowNombreProd = oci_fetch_assoc($stmtNombreProd);
-                $nombreProducto = $rowNombreProd['NOMBRE'];
-                
-                $mensaje_exito = "Pedido #$nuevoIdPedido creado para el producto \"$nombreProducto\"";
-                
+// ============================================
+//PKG_PEDIDO.SP_CREAR_PEDIDO
+//  p_id_cliente, p_id_producto, p_cantidad, p_estado, p_id_usuario, p_resultado OUT
+// El SP calcula precio, subtotal y crea pedido + detalle en una transaccion
+// ============================================
+            $stid = oci_parse($conn,
+                'BEGIN PKG_PEDIDO.SP_CREAR_PEDIDO(:id_cliente, :id_producto,
+                                                   :cantidad, :estado, :id_usuario, :resultado); END;');
+
+            $resultado = '';
+            oci_bind_by_name($stid, ':id_cliente',  $cliente);
+            oci_bind_by_name($stid, ':id_producto', $producto);
+            oci_bind_by_name($stid, ':cantidad',    $cantidad);
+            oci_bind_by_name($stid, ':estado',      $estado);
+            oci_bind_by_name($stid, ':id_usuario',  $_SESSION['usuario_id']);
+            oci_bind_by_name($stid, ':resultado',   $resultado, 500);
+            oci_execute($stid);
+            oci_free_statement($stid);
+
+            if (str_starts_with($resultado, 'OK')) {
+                // Confirmar transacción exitosa
+                $mensaje_exito = $resultado;
+
                 // Redirigir con mensaje de éxito usando JavaScript
                 echo "<script>
                     Swal.fire({
                         icon: 'success',
-                        title: '¡Pedido creado!',
+                        title: 'Pedido creado!',
                         text: '" . addslashes($mensaje_exito) . "',
                         confirmButtonColor: '#2c3e50',
                         confirmButtonText: 'Aceptar'
@@ -145,20 +104,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 </script>";
                 exit;
             } else {
-                // Revertir transacción
-                oci_rollback($conn);
-                
-                // Manejo de errores de triggers
-                if (strpos($mensajeErrorTrigger, 'ORA-20501') !== false) {
+                // Manejo de errores devueltos por el paquete
+                if (strpos($resultado, 'ORA-20501') !== false) {
                     $mensaje_error = "Total del pedido inválido (debe ser mayor a 0)";
-                } elseif (strpos($mensajeErrorTrigger, 'ORA-20502') !== false) {
-                    $mensaje_error = "Cantidad inválida. La cantidad debe ser mayor a 0";
-                } elseif (strpos($mensajeErrorTrigger, 'ORA-20503') !== false) {
-                    $mensaje_error = "Subtotal inválido. Verifique que cantidad y precio sean válidos";
-                } elseif (strpos($mensajeErrorTrigger, 'ORA-20504') !== false) {
+                } elseif (strpos($resultado, 'ORA-20502') !== false) {
+                    $mensaje_error = "Cantidad invalida. La cantidad debe ser mayor a 0";
+                } elseif (strpos($resultado, 'ORA-20503') !== false) {
+                    $mensaje_error = "Subtotal invalido. Verifique que cantidad y precio sean válidos";
+                } elseif (strpos($resultado, 'ORA-20504') !== false) {
                     $mensaje_error = "Stock insuficiente. No hay suficiente inventario para completar el pedido";
                 } else {
-                    $mensaje_error = "Error al registrar pedido: " . $mensajeErrorTrigger;
+                    $mensaje_error = "Error al registrar pedido: " . $resultado;
                 }
             }
         }
@@ -459,7 +415,7 @@ function validarFormulario(event) {
     }
     
     if (producto === '') {
-        Swal.fire({ icon: 'warning', title: 'Campo requerido', text: 'Por favor seleccione un producto', confirmButtonColor: '#2c3e50' });
+        Swal.fire({ icon: 'warning', title: 'Campo requerido', text: 'Por favor seleccionar un producto', confirmButtonColor: '#2c3e50' });
         return false;
     }
     

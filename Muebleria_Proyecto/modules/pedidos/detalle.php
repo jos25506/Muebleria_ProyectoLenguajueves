@@ -13,17 +13,39 @@ $conn = $db->getConnection();
 
 $id = $_GET['id'] ?? 0;
 
-// Datos del pedido
-$query = "SELECT p.*, c.NOMBRE as CLIENTE, c.TELEFONO, c.CORREO, c.DIRECCION,
-                 u.NOMBRE as USUARIO
-          FROM MUEBLERIA.PEDIDO p
-          JOIN MUEBLERIA.CLIENTE c ON p.ID_CLIENTE = c.ID_CLIENTE
-          JOIN MUEBLERIA.USUARIO u ON p.ID_USUARIO = u.ID_USUARIO
-          WHERE p.ID_PEDIDO = :id";
-$stmt = oci_parse($conn, $query);
-oci_bind_by_name($stmt, ':id', $id);
-oci_execute($stmt);
-$pedido = oci_fetch_assoc($stmt);
+/* -------------------------------------------------------
+PKG_PEDIDO.FN_OBTENER_PEDIDO(p_id) RETURN SYS_REFCURSOR
+CursorID_PEDIDO, FECHA, ESTADO, TOTAL, CLIENTE,
+CANTIDAD, PRECIO_UNITARIO, SUB_TOTAL, PRODUCTO*/
+$stid = oci_parse($conn, 'BEGIN :cursor := PKG_PEDIDO.FN_OBTENER_PEDIDO(:id); END;');
+$cursor = oci_new_cursor($conn);
+oci_bind_by_name($stid, ':cursor', $cursor, -1, OCI_B_CURSOR);
+oci_bind_by_name($stid, ':id',     $id);
+oci_execute($stid);
+oci_execute($cursor);
+
+// Datos del pedido con fecha formateada
+$pedido   = null;
+$detalles = [];
+while ($row = oci_fetch_assoc($cursor)) {
+    if ($pedido === null) {
+        $pedido = [
+            'ID_PEDIDO'  => $row['ID_PEDIDO'],
+            'FECHA_FORMATEADA' => date('d/m/Y', strtotime($row['FECHA'])),
+            'ESTADO'=> $row['ESTADO'],
+            'TOTAL' => $row['TOTAL'],
+            'CLIENTE' => $row['CLIENTE'],
+        ];
+    }
+    $detalles[] = [
+        'PRODUCTO'=> $row['PRODUCTO'],
+        'CANTIDAD' => $row['CANTIDAD'],
+        'PRECIO_UNITARIO' => $row['PRECIO_UNITARIO'],
+        'SUB_TOTAL'=> $row['SUB_TOTAL'],
+    ];
+}
+oci_free_statement($stid);
+oci_free_statement($cursor);
 
 if (!$pedido) {
     echo "<script>
@@ -34,14 +56,16 @@ if (!$pedido) {
 }
 
 // Detalles del pedido (productos)
-$query_det = "SELECT d.*, pr.NOMBRE as PRODUCTO, pr.PRECIO as PRECIO_VENTA
-              FROM MUEBLERIA.DETALLE_PEDIDO d
-              JOIN MUEBLERIA.PRODUCTO pr ON d.ID_PRODUCTO = pr.ID_PRODUCTO
-              WHERE d.ID_PEDIDO = :id
-              ORDER BY d.ID_DETALLE";
+// Datos de contacto del cliente telefono,correo y direccion que no los devuelve el paquete)
+$query_det = "SELECT TELEFONO, CORREO, DIRECCION
+              FROM MUEBLERIA.CLIENTE
+              WHERE NOMBRE = :nombre";
 $stmt_det = oci_parse($conn, $query_det);
-oci_bind_by_name($stmt_det, ':id', $id);
+oci_bind_by_name($stmt_det, ':nombre', $pedido['CLIENTE']);
 oci_execute($stmt_det);
+$contacto = oci_fetch_assoc($stmt_det) ?: [];
+oci_free_statement($stmt_det);
+$db->close();
 ?>
 
 <style>
@@ -81,7 +105,7 @@ oci_execute($stmt_det);
             </div>
             <div class="col-md-3">
                 <div class="detalle-label">Fecha:</div>
-                <div class="detalle-valor"><?php echo date('d/m/Y', strtotime($pedido['FECHA'])); ?></div>
+                <div class="detalle-valor"><?php echo $pedido['FECHA_FORMATEADA']; ?></div>
             </div>
             <div class="col-md-3">
                 <div class="detalle-label">Estado:</div>
@@ -113,15 +137,15 @@ oci_execute($stmt_det);
             </div>
             <div class="col-md-4">
                 <div class="detalle-label">Teléfono:</div>
-                <div class="detalle-valor"><?php echo htmlspecialchars($pedido['TELEFONO']); ?></div>
+                <div class="detalle-valor"><?php echo htmlspecialchars($contacto['TELEFONO'] ?? ''); ?></div>
             </div>
             <div class="col-md-4">
                 <div class="detalle-label">Correo:</div>
-                <div class="detalle-valor"><?php echo htmlspecialchars($pedido['CORREO']); ?></div>
+                <div class="detalle-valor"><?php echo htmlspecialchars($contacto['CORREO'] ?? ''); ?></div>
             </div>
             <div class="col-md-12 mt-2">
                 <div class="detalle-label">Dirección:</div>
-                <div class="detalle-valor"><?php echo htmlspecialchars($pedido['DIRECCION']); ?></div>
+                <div class="detalle-valor"><?php echo htmlspecialchars($contacto['DIRECCION'] ?? ''); ?></div>
             </div>
         </div>
         
@@ -132,7 +156,6 @@ oci_execute($stmt_det);
             <table class="table table-striped table-hover">
                 <thead class="table-dark">
                     <tr>
-                        <th>ID</th>
                         <th>Producto</th>
                         <th>Cantidad</th>
                         <th>Precio Unitario</th>
@@ -143,22 +166,21 @@ oci_execute($stmt_det);
                     <?php 
                     $subtotal_total = 0;
                     $hay_productos = false;
-                    while ($detalle = oci_fetch_assoc($stmt_det)): 
+                    foreach ($detalles as $detalle):
                         $hay_productos = true;
                         $subtotal_total += $detalle['SUB_TOTAL'];
                     ?>
                     <tr>
-                        <td><?php echo $detalle['ID_DETALLE']; ?></td>
                         <td><?php echo htmlspecialchars($detalle['PRODUCTO']); ?></td>
                         <td><?php echo $detalle['CANTIDAD']; ?></td>
                         <td>₡<?php echo number_format($detalle['PRECIO_UNITARIO'], 0, ',', '.'); ?></td>
                         <td>₡<?php echo number_format($detalle['SUB_TOTAL'], 0, ',', '.'); ?></td>
                     </tr>
-                    <?php endwhile; ?>
+                    <?php endforeach; ?>
                     
                     <?php if (!$hay_productos): ?>
                     <tr>
-                        <td colspan="5" class="text-center">
+                        <td colspan="4" class="text-center">
                             <div class="alert alert-warning mb-0">
                                 No hay productos registrados en este pedido.
                             </div>
@@ -169,7 +191,7 @@ oci_execute($stmt_det);
                 <?php if ($hay_productos): ?>
                 <tfoot class="table-secondary">
                     <tr>
-                        <th colspan="4" class="text-end">Total General:</th>
+                        <th colspan="3" class="text-end">Total General:</th>
                         <th>₡<?php echo number_format($subtotal_total, 0, ',', '.'); ?></th>
                     </tr>
                 </tfoot>
@@ -187,14 +209,7 @@ oci_execute($stmt_det);
         <?php endif; ?>
         
         <!-- Información del usuario que registró -->
-        <div class="row mt-4">
-            <div class="col-md-12">
-                <div class="alert alert-info">
-                    <i class="fas fa-user-check"></i> 
-                    <strong>Registrado por:</strong> <?php echo htmlspecialchars($pedido['USUARIO']); ?>
-                </div>
-            </div>
-        </div>
+        <!-- El paquete PKG_PEDIDO no expone el usuario registrador en su cursor -->
         
         <div class="text-center mt-4">
             <a href="pedidos.php" class="btn btn-secondary">
@@ -203,32 +218,11 @@ oci_execute($stmt_det);
             <a href="javascript:window.print()" class="btn btn-info">
                 <i class="fas fa-print"></i> Imprimir
             </a>
-            <?php if ($pedido['ESTADO'] == 'PENDIENTE'): ?>
-            <a href="editar_estado.php?id=<?php echo $pedido['ID_PEDIDO']; ?>&estado=ENVIADO" 
-               class="btn btn-primary"
-               onclick="return confirm('¿Marcar este pedido como ENVIADO?')">
-                <i class="fas fa-truck"></i> Marcar como Enviado
-            </a>
-            <a href="editar_estado.php?id=<?php echo $pedido['ID_PEDIDO']; ?>&estado=ENTREGADO" 
-               class="btn btn-success"
-               onclick="return confirm('¿Marcar este pedido como ENTREGADO?')">
-                <i class="fas fa-check-circle"></i> Marcar como Entregado
-            </a>
-            <?php elseif ($pedido['ESTADO'] == 'ENVIADO'): ?>
-            <a href="editar_estado.php?id=<?php echo $pedido['ID_PEDIDO']; ?>&estado=ENTREGADO" 
-               class="btn btn-success"
-               onclick="return confirm('¿Marcar este pedido como ENTREGADO?')">
-                <i class="fas fa-check-circle"></i> Marcar como Entregado
-            </a>
-            <?php endif; ?>
         </div>
         
     </div>
 </div>
 
 <?php
-oci_free_statement($stmt);
-oci_free_statement($stmt_det);
-$db->close();
 include __DIR__ . '/../../includes/footer.php';
 ?>
